@@ -1,0 +1,253 @@
+/*
+  ESP32-S3 N16R8 + LCD 16x2
+  WiFi NTP Clock - Syria UTC+3
+
+  LCD Line 1: HH:MM:SS
+  LCD Line 2: DD/MM/YYYY Day
+
+  LCD interface: 8-bit parallel
+  Library: LiquidCrystal
+*/
+
+#include <WiFi.h>
+#include <time.h>
+#include <LiquidCrystal.h>
+
+// -------- WiFi --------
+const char* WIFI_SSID = "YOUR_WIFI_NAME";
+const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
+
+// -------- NTP --------
+const char* NTP_SERVER_1 = "pool.ntp.org";
+const char* NTP_SERVER_2 = "time.google.com";
+const char* NTP_SERVER_3 = "time.cloudflare.com";
+
+// Syria UTC+3
+const char* TZ_INFO = "<+03>-3";
+
+// -------- LCD PINS --------
+// LiquidCrystal(RS, E, D0, D1, D2, D3, D4, D5, D6, D7)
+
+#define LCD_RS 4
+#define LCD_E  5
+
+#define LCD_D0 6
+#define LCD_D1 7
+#define LCD_D2 8
+#define LCD_D3 9
+#define LCD_D4 10
+#define LCD_D5 11
+#define LCD_D6 12
+#define LCD_D7 13
+
+LiquidCrystal lcd(
+  LCD_RS,
+  LCD_E,
+  LCD_D0,
+  LCD_D1,
+  LCD_D2,
+  LCD_D3,
+  LCD_D4,
+  LCD_D5,
+  LCD_D6,
+  LCD_D7
+);
+
+const char* DAY_NAMES[7] = {
+  "Sun", "Mon", "Tue", "Wed",
+  "Thu", "Fri", "Sat"
+};
+
+bool timeValid = false;
+int lastSecond = -1;
+
+// -------- Connect WiFi --------
+bool connectWiFi() {
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Connecting WiFi");
+
+  Serial.printf("Connecting to %s\n", WIFI_SSID);
+
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+  unsigned long start = millis();
+
+  while (WiFi.status() != WL_CONNECTED) {
+
+    delay(500);
+    Serial.print(".");
+
+    if (millis() - start >= 20000) {
+
+      Serial.println("\nWiFi connection failed!");
+
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("WiFi Failed");
+
+      lcd.setCursor(0, 1);
+      lcd.print("Check Settings");
+
+      return false;
+    }
+  }
+
+  Serial.println("\nWiFi connected!");
+  Serial.print("IP Address: ");
+  Serial.println(WiFi.localIP());
+
+  lcd.clear();
+  lcd.print("WiFi Connected");
+
+  delay(1000);
+
+  return true;
+}
+
+// -------- Synchronize Time --------
+bool startNTP() {
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Syncing time...");
+
+  Serial.println("Starting NTP synchronization...");
+
+  configTzTime(
+    TZ_INFO,
+    NTP_SERVER_1,
+    NTP_SERVER_2,
+    NTP_SERVER_3
+  );
+
+  struct tm t;
+  unsigned long start = millis();
+
+  while (millis() - start < 20000) {
+
+    if (getLocalTime(&t, 1000)) {
+
+      timeValid = true;
+
+      Serial.println("Time synchronized!");
+
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("Time Synced!");
+
+      delay(1000);
+      lcd.clear();
+
+      return true;
+    }
+
+    Serial.println("Waiting for NTP...");
+  }
+
+  timeValid = false;
+
+  Serial.println("NTP synchronization failed!");
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("NTP Failed");
+
+  lcd.setCursor(0, 1);
+  lcd.print("Retrying...");
+
+  delay(2000);
+
+  return false;
+}
+
+// -------- Setup --------
+void setup() {
+
+  Serial.begin(115200);
+  delay(500);
+
+  lcd.begin(16, 2);
+  lcd.clear();
+
+  lcd.setCursor(0, 0);
+  lcd.print("ESP32-S3 Clock");
+
+  lcd.setCursor(0, 1);
+  lcd.print("Starting...");
+
+  delay(1500);
+
+  if (connectWiFi()) {
+    startNTP();
+  }
+}
+
+// -------- Main Loop --------
+void loop() {
+
+  // Reconnect WiFi if disconnected
+  if (WiFi.status() != WL_CONNECTED) {
+
+    timeValid = false;
+
+    if (!connectWiFi()) {
+      delay(3000);
+      return;
+    }
+
+    startNTP();
+    return;
+  }
+
+  // Retry time synchronization
+  if (!timeValid) {
+    startNTP();
+    return;
+  }
+
+  struct tm t;
+
+  if (!getLocalTime(&t, 1000)) {
+    timeValid = false;
+    return;
+  }
+
+  // Update display once per second
+  if (t.tm_sec != lastSecond) {
+
+    lastSecond = t.tm_sec;
+
+    char line1[17];
+    char line2[17];
+
+    snprintf(
+      line1,
+      sizeof(line1),
+      "%02d:%02d:%02d",
+      t.tm_hour,
+      t.tm_min,
+      t.tm_sec
+    );
+
+    snprintf(
+      line2,
+      sizeof(line2),
+      "%02d/%02d/%04d %s",
+      t.tm_mday,
+      t.tm_mon + 1,
+      t.tm_year + 1900,
+      DAY_NAMES[t.tm_wday]
+    );
+
+    lcd.setCursor(4, 0);
+    lcd.print(line1);
+
+    lcd.setCursor(1, 1);
+    lcd.print(line2);
+  }
+
+  delay(50);
+}
